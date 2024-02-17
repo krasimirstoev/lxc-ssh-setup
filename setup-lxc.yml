@@ -1,0 +1,57 @@
+---
+- name: Setup SSH in LXC container
+  hosts: localhost
+  gather_facts: no
+
+  tasks:
+    - name: Check if the distribution is Debian-based
+      ansible.builtin.shell: lxc exec {{ container_name }} -- grep -qs 'ID=debian\|ID_LIKE=debian' /etc/os-release
+      register: is_debian
+      ignore_errors: yes 
+      delegate_to: localhost
+
+    - name: Install openssh-server on Debian-based distributions
+      ansible.builtin.shell: lxc exec {{ container_name }} -- /usr/bin/apt-get update && /usr/bin/apt-get install openssh-server -y
+      when: is_debian.rc == 0
+      delegate_to: localhost
+
+    - name: Check if the distribution is Red Hat-based
+      ansible.builtin.shell: lxc exec {{ container_name }} -- grep -qs 'ID=centos\|ID=fedora\|ID=rhel\|ID_LIKE=fedora' /etc/os-release
+      register: is_redhat
+      ignore_errors: yes 
+      delegate_to: localhost
+
+    - name: Install openssh-server on Red Hat-based distributions
+      ansible.builtin.shell: |
+        lxc exec {{ container_name }} -- /bin/bash -c " \ 
+        if command -v dnf > /dev/null; then \
+          dnf install openssh-server -y; \
+        elif command -v yum > /dev/null; then \
+          yum install openssh-server -y; \
+        fi"
+      when: is_redhat.rc == 0
+      delegate_to: localhost
+
+    - name: Allow root login via SSH in the container
+      ansible.builtin.command: lxc exec {{ container_name }} -- /bin/bash -c "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"
+      delegate_to: localhost
+
+    - name: Ensure .ssh directory exists for root
+      ansible.builtin.command: lxc exec {{ container_name }} -- /bin/bash -c "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+      delegate_to: localhost
+
+    - name: Copy the public key to a temporary location in the container
+      ansible.builtin.command: lxc file push files/my_public_key.pub {{ container_name }}/tmp/public_key.pub
+      delegate_to: localhost
+
+    - name: Append the public key to authorized_keys in the container
+      ansible.builtin.command: lxc exec {{ container_name }} -- bash -c "cat /tmp/public_key.pub >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys"
+      delegate_to: localhost
+
+    - name: Remove the temporary public key file in the container
+      ansible.builtin.command: lxc exec {{ container_name }} -- rm /tmp/public_key.pub
+      delegate_to: localhost
+ 
+    - name: Restart SSH service in the container
+      ansible.builtin.command: lxc exec {{ container_name }} -- systemctl restart ssh 
+      delegate_to: localhost
